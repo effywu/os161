@@ -30,6 +30,7 @@
 #ifndef _PROC_H_
 #define _PROC_H_
 
+
 /*
  * Definition of a process.
  *
@@ -38,12 +39,27 @@
 
 #include <spinlock.h>
 #include <thread.h> /* required for struct threadarray */
+#include <synch.h>
+#include "opt-A2.h"
+#include <limits.h>
+#include <array.h>
 
 struct addrspace;
 struct vnode;
 #ifdef UW
 struct semaphore;
 #endif // UW
+
+#if OPT_A2
+#ifndef PROCINLINE
+#define PROCINLINE INLINE
+#endif
+struct proc;
+DECLARRAY(proc);
+DEFARRAY(proc, PROCINLINE);
+bool arr[PID_MAX];
+int next_pid;
+#endif
 
 /*
  * Process structure.
@@ -66,10 +82,22 @@ struct proc {
      system calls, since each process will need to keep track of all files
      it has opened, not just the console. */
   struct vnode *console;                /* a vnode for the console device */
-#endif
 
+
+#endif
+#if OPT_A2
 	/* add more material here as needed */
+	pid_t p_id;
+	struct procarray p_children;
+	struct proc * p_parent;
+	bool p_exited;
+	int p_exitstatus;
+	struct lock * p_exit_lk;
+	struct cv * p_exit_cv;
+
+#endif
 };
+
 
 /* This is the process structure for the kernel and for kernel-only threads. */
 extern struct proc *kproc;
@@ -78,6 +106,16 @@ extern struct proc *kproc;
 #ifdef UW
 extern struct semaphore *no_proc_sem;
 #endif // UW
+
+#if OPT_A2
+struct proc* find_child(struct proc * parent,pid_t pid);
+
+bool pid_in_use(pid_t pid);
+
+int add_child(struct proc* parent, struct proc * child);
+
+void remove_parent(struct proc * proc);
+#endif
 
 /* Call once during system startup to allocate data structures. */
 void proc_bootstrap(void);

@@ -41,7 +41,8 @@
  * Unless you're implementing multithreaded user processes, the only
  * process that will have more than one thread is the kernel process.
  */
-
+ 
+#define PROCINLINE
 #include <types.h>
 #include <proc.h>
 #include <current.h>
@@ -49,7 +50,8 @@
 #include <vnode.h>
 #include <vfs.h>
 #include <synch.h>
-#include <kern/fcntl.h>  
+#include <kern/fcntl.h>
+#include <limits.h>
 
 /*
  * The process for the kernel; this holds all the kernel-only threads.
@@ -68,6 +70,11 @@ static struct semaphore *proc_count_mutex;
 /* used to signal the kernel menu thread when there are no processes */
 struct semaphore *no_proc_sem;   
 #endif  // UW
+
+#if OPT_A2
+bool arr[PID_MAX];
+int next_pid=1;
+#endif
 
 
 
@@ -102,6 +109,22 @@ proc_create(const char *name)
 #ifdef UW
 	proc->console = NULL;
 #endif // UW
+
+#if OPT_A2
+	if (next_pid==0) next_pid++;
+	while (arr[next_pid]){
+		next_pid++;
+		next_pid=next_pid%PID_MAX;
+	};
+	proc->p_id=next_pid;
+	arr[next_pid]=true;
+	next_pid++;
+	procarray_init(&proc->p_children);
+	proc->p_exited=false;
+	proc->p_exit_lk=lock_create("p_exit_lk");
+	proc->p_exit_cv=cv_create("p_exit_cv");
+
+#endif
 
 	return proc;
 }
@@ -165,6 +188,14 @@ proc_destroy(struct proc *proc)
 
 	threadarray_cleanup(&proc->p_threads);
 	spinlock_cleanup(&proc->p_lock);
+	
+#if OPT_A2
+	proc->p_parent=NULL;
+	//lock_release(proc->p_exit_lk);
+	//lock_destroy((struct lock*)&proc->p_exit_lk);
+	//cv_destroy((struct cv*)&proc->p_exit_cv);
+	//remove_parent((struct proc*)&proc);
+#endif
 
 	kfree(proc->p_name);
 	kfree(proc);
@@ -183,9 +214,41 @@ proc_destroy(struct proc *proc)
 	}
 	V(proc_count_mutex);
 #endif // UW
+
+
 	
 
 }
+
+#if OPT_A2
+struct proc* find_child(struct proc * parent,pid_t pid){
+	int num = procarray_num(&parent->p_children);
+	for (int i=0; i<num; i++) {
+		if (procarray_get(&parent->p_children, i)->p_id == pid) {
+			return procarray_get(&parent->p_children, i);
+		}
+	}
+	return NULL;
+}
+
+bool pid_in_use(pid_t pid){
+	return arr[pid];
+}
+
+int add_child(struct proc* parent, struct proc * child){
+	int err=procarray_add(&parent->p_children,child,NULL);
+	return(err);
+}
+
+void remove_parent(struct proc* proc){
+	int num = procarray_num(&proc->p_children);
+	for (int i=0; i<num; i++) {
+			procarray_get(&proc->p_children, i)->p_parent=NULL;
+			procarray_remove(&proc->p_children, i);
+		
+	};
+}
+#endif
 
 /*
  * Create the process structure for the kernel.

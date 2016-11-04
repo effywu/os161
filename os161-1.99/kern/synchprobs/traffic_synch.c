@@ -3,6 +3,7 @@
 #include <synchprobs.h>
 #include <synch.h>
 #include <opt-A1.h>
+#include <array.h>
 
 /* 
  * This simple default synchronization mechanism allows only vehicle at a time
@@ -21,7 +22,14 @@
 /*
  * replace this with declarations of any synchronization and other variables you need here
  */
-static struct semaphore *intersectionSem;
+ typedef struct vehicle{
+	 Direction origin;
+	 Direction destination;
+ } vehicle;
+bool turning_right(vehicle * v);
+static struct cv* intersectionFree;
+static struct lock* intersectionLock;
+struct array* vehicles;
 
 
 /* 
@@ -35,10 +43,13 @@ void
 intersection_sync_init(void)
 {
   /* replace this default implementation with your own implementation */
-
-  intersectionSem = sem_create("intersectionSem",1);
-  if (intersectionSem == NULL) {
-    panic("could not create intersection semaphore");
+  
+  intersectionFree=cv_create("intersectionFree");
+  intersectionLock=lock_create("intersectionLock");
+  vehicles=array_create();
+  array_init(vehicles);
+  if (intersectionFree==NULL||intersectionLock==NULL||vehicles==NULL) {
+    panic("could not init intersection");
   }
   return;
 }
@@ -54,8 +65,17 @@ void
 intersection_sync_cleanup(void)
 {
   /* replace this default implementation with your own implementation */
-  KASSERT(intersectionSem != NULL);
-  sem_destroy(intersectionSem);
+  KASSERT(intersectionFree != NULL);
+  KASSERT(intersectionLock != NULL);
+  KASSERT(vehicles != NULL);
+  cv_destroy(intersectionFree);
+  lock_destroy(intersectionLock);
+  
+  for (unsigned int i=0;i<array_num(vehicles);i++){
+	  vehicle * currentVehicle=array_get(vehicles,i);
+	  kfree(currentVehicle);
+  }
+  array_destroy(vehicles);
 }
 
 
@@ -72,14 +92,66 @@ intersection_sync_cleanup(void)
  * return value: none
  */
 
+bool
+turning_right(vehicle * car){
+	switch (car->origin){
+		case north:
+			if (car->destination==west) return true;
+			break;
+		case east:
+			if (car->destination==north) return true;
+			break;
+		case south:
+			if (car->destination==east) return true;
+			break;
+		case west:
+			if (car->destination==south) return true;
+			break;
+	}
+	return false;
+}
 void
 intersection_before_entry(Direction origin, Direction destination) 
 {
   /* replace this default implementation with your own implementation */
-  (void)origin;  /* avoid compiler complaint about unused parameter */
-  (void)destination; /* avoid compiler complaint about unused parameter */
-  KASSERT(intersectionSem != NULL);
-  P(intersectionSem);
+  KASSERT(intersectionFree != NULL);
+  KASSERT(intersectionLock != NULL);
+  KASSERT(vehicles != NULL);
+  
+  lock_acquire(intersectionLock);
+  vehicle* incoming=kmalloc(sizeof(struct vehicle));
+  KASSERT(incoming!=NULL);
+  incoming->origin=origin;
+  incoming->destination=destination;
+  bool hasEntered=false;
+  while(!hasEntered){
+	  bool canEnter=true;
+	  for (unsigned int i=0;i<array_num(vehicles);i++){
+		  vehicle * currentVehicle=array_get(vehicles,i);
+		  if (origin==currentVehicle->origin){
+			  continue;
+		  } else if (origin==currentVehicle->destination&&destination==currentVehicle->origin){
+			  continue;
+		  } else if (destination!=currentVehicle->destination){
+			  if (turning_right(incoming)||turning_right(currentVehicle)){
+				 continue;
+			  } else {
+				  canEnter=false;
+				  cv_wait(intersectionFree,intersectionLock);
+				  break;
+			  }
+		  } else {
+			  canEnter=false;
+			  cv_wait(intersectionFree,intersectionLock);
+			  break;
+		  }
+	  }
+	  if (canEnter){
+		  array_add(vehicles,incoming,NULL);
+		  hasEntered=true;
+	  }
+  }
+  lock_release(intersectionLock);
 }
 
 
@@ -98,8 +170,19 @@ void
 intersection_after_exit(Direction origin, Direction destination) 
 {
   /* replace this default implementation with your own implementation */
-  (void)origin;  /* avoid compiler complaint about unused parameter */
-  (void)destination; /* avoid compiler complaint about unused parameter */
-  KASSERT(intersectionSem != NULL);
-  V(intersectionSem);
+  KASSERT(intersectionFree != NULL);
+  KASSERT(intersectionLock != NULL);
+  KASSERT(vehicles != NULL);
+  
+  lock_acquire(intersectionLock);
+  for (unsigned int i=0;i<array_num(vehicles);i++){
+	  vehicle * currentVehicle=array_get(vehicles,i);
+	  if (currentVehicle->origin==origin&&currentVehicle->destination==destination){
+		  array_remove(vehicles,i);
+		  kfree(currentVehicle);
+		  cv_broadcast(intersectionFree,intersectionLock);
+		  break;
+	  }
+  }
+  lock_release(intersectionLock);
 }

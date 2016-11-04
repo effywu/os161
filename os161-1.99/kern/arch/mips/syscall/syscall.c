@@ -35,6 +35,7 @@
 #include <thread.h>
 #include <current.h>
 #include <syscall.h>
+#include <addrspace.h>
 
 
 /*
@@ -98,6 +99,7 @@ syscall(struct trapframe *tf)
 	 */
 
 	retval = 0;
+	DEBUG(DB_SYSCALL, "Entering switch case in syscall!!\n");
 
 	switch (callno) {
 	    case SYS_reboot:
@@ -121,18 +123,26 @@ syscall(struct trapframe *tf)
 	  panic("unexpected return from sys__exit");
 	  break;
 	case SYS_getpid:
+		DEBUG(DB_SYSCALL, "case getpid!!\n");
 	  err = sys_getpid((pid_t *)&retval);
 	  break;
 	case SYS_waitpid:
+		DEBUG(DB_SYSCALL, "case waitpid\n");
 	  err = sys_waitpid((pid_t)tf->tf_a0,
 			    (userptr_t)tf->tf_a1,
 			    (int)tf->tf_a2,
 			    (pid_t *)&retval);
 	  break;
-#endif // UW
-
 	    /* Add stuff here */
- 
+#endif // UW
+#if OPT_A2
+	DEBUG(DB_SYSCALL, "case fork!!\n");
+	case SYS_fork:
+	  DEBUG(DB_SYSCALL, "case fork!!\n");
+	  err = sys_fork(tf,(pid_t *)(&retval));
+	  break;
+#endif
+
 	default:
 	  kprintf("Unknown syscall %d\n", callno);
 	  err = ENOSYS;
@@ -177,7 +187,20 @@ syscall(struct trapframe *tf)
  * Thus, you can trash it and do things another way if you prefer.
  */
 void
-enter_forked_process(struct trapframe *tf)
+enter_forked_process(void *tf,unsigned long var)
 {
+#if OPT_A2
+	(void)var;
+	struct trapframe new_tf;
+	memcpy(&new_tf,(struct trapframe *)tf,sizeof(struct trapframe));
+	kfree(tf);
+	new_tf.tf_v0 = 0;
+	new_tf.tf_a3 = 0;
+	new_tf.tf_epc += 4;
+	as_activate(); 
+	mips_usermode(&new_tf);
+#else
+	(void)var;
 	(void)tf;
+#endif
 }
